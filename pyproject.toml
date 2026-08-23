@@ -1,17 +1,11 @@
 [project]
 name = "python-authz"
-version = "0.1.0"
+version = "0.5.0"
 description = "Add your description here"
 readme = "README.md"
-authors = [
-    { name = "Anupam Gupta", email = "anupam@trois.in" }
-]
+authors = [{ name = "Anupam Gupta", email = "anupam@trois.in" }]
 requires-python = ">=3.11"
-dependencies = [
-    "duckdb>=1.5.5",
-    "aiosqlite>=0.21.0",
-    "asyncpg>=0.31.0",
-]
+dependencies = ["duckdb>=1.5.5", "aiosqlite>=0.21.0", "asyncpg>=0.31.0"]
 
 [project.optional-dependencies]
 fastapi = ["fastapi[all]>=0.141.1"]
