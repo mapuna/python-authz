@@ -1,8 +1,8 @@
 # Recipe: Self-Issued JWT
 
-The app is its own identity provider — `/login` checks credentials against
+The app is its own identity provider. `/login` checks credentials against
 a tiny in-memory user store and mints a signed JWT; `get_current_user`
-verifies that JWT on every subsequent request. No external service
+verifies that JWT on every subsequent request. No external service is
 involved.
 
 ## Run it
@@ -26,14 +26,14 @@ Wrong credentials, a missing token, or a tampered/expired token all return
 
 ## What to change for production
 
-- **`SECRET_KEY`** — hardcoded here for a runnable demo. Read it from an
+- **`SECRET_KEY`**: hardcoded here for a runnable demo. Read it from an
   environment variable instead, and never commit a real one.
-- **`FAKE_USERS`** — a plain dict is fine for this recipe; a real app
+- **`FAKE_USERS`**: a plain dict is fine for this recipe; a real app
   checks credentials against its actual user store (hashed passwords, not
   plaintext).
-- **Token expiry** — tune `timedelta(hours=1)` in `login()` to whatever
+- **Token expiry**: tune `timedelta(hours=1)` in `login()` to whatever
   your app's session policy calls for, and consider adding refresh tokens
   if silent re-authentication matters to you.
-- **Algorithm** — this recipe uses `HS256` (a shared secret) for
+- **Algorithm**: this recipe uses `HS256` (a shared secret) for
   simplicity. If multiple services need to verify tokens without sharing
   that secret, use `RS256`/`ES256` with a public/private key pair instead.

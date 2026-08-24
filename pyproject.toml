@@ -1,11 +1,28 @@
 [project]
 name = "python-authz"
 version = "0.5.0"
-description = "Add your description here"
+description = "A framework-agnostic ReBAC/RBAC/ABAC authorization engine built on one Zanzibar-style relationship graph"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Anupam Gupta", email = "anupam@trois.in" }]
 requires-python = ">=3.11"
 dependencies = ["duckdb>=1.5.5", "aiosqlite>=0.21.0", "asyncpg>=0.31.0"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Homepage = "https://github.com/mapuna/python-authz"
+Repository = "https://github.com/mapuna/python-authz"
+Issues = "https://github.com/mapuna/python-authz/issues"
 
 [project.optional-dependencies]
 fastapi = ["fastapi[all]>=0.141.1"]
