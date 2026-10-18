@@ -1,6 +1,6 @@
 from collections import deque
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, Mapping, Sequence
 
 from authz.conditions import ConditionEvaluator, ConditionFn
 from authz.errors import (
@@ -28,11 +28,40 @@ from authz.tuples import ObjectRef, RelationTuple, SubjectRef
 
 
 @dataclass(frozen=True)
+class CheckItem:
+    subject: str
+    permission: str
+    resource: str
+    context: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class EvaluationDecision:
+    allowed: bool
+    subject: str
+    permission: str
+    resource: str
+    matched_tuples: tuple[RelationTuple, ...] = ()
+    visited_path: tuple[str, ...] = ()
+    condition_results: tuple[tuple[str, bool], ...] = ()
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class UsersetTree:
     relation: str
     object: ObjectRef
     direct_subjects: tuple[str, ...] = ()
     children: tuple["UsersetTree", ...] = ()
+
+
+class _TraceCollector:
+    __slots__ = ("visited_path", "matched_tuples", "condition_results")
+
+    def __init__(self) -> None:
+        self.visited_path: list[str] = []
+        self.matched_tuples: list[RelationTuple] = []
+        self.condition_results: list[tuple[str, bool]] = []
 
 
 class Client:
@@ -59,6 +88,14 @@ class Client:
 
     def register_condition(self, name: str, fn: ConditionFn) -> None:
         self._conditions.register(name, fn)
+
+    @property
+    def schema(self) -> dict[str, Namespace]:
+        return self._namespaces
+
+    @property
+    def _schema(self) -> dict[str, Namespace]:
+        return self._namespaces
 
     def _get_relation(self, namespace: str, relation: str) -> RewriteRule:
         ns = self._namespaces.get(namespace)
@@ -136,6 +173,28 @@ class Client:
             namespace, object_id=object_id, relation=relation, subject=subject
         )
 
+    async def _read_tuples(
+        self,
+        namespace: str,
+        object_id: str | None = None,
+        relation: str | None = None,
+        subject: str | None = None,
+        *,
+        read_cache: dict[tuple[str, str | None, str | None, str | None], list[RelationTuple]] | None = None,
+    ) -> list[RelationTuple]:
+        if read_cache is not None:
+            key = (namespace, object_id, relation, subject)
+            if key in read_cache:
+                return read_cache[key]
+            result = await self._storage.read_tuples(
+                namespace, object_id=object_id, relation=relation, subject=subject
+            )
+            read_cache[key] = result
+            return result
+        return await self._storage.read_tuples(
+            namespace, object_id=object_id, relation=relation, subject=subject
+        )
+
     async def check(
         self,
         subject: str,
@@ -143,14 +202,162 @@ class Client:
         resource: str,
         *,
         at_least_as_fresh_as: Token | None = None,
+        context: Mapping[str, Any] | None = None,
+        _read_cache: dict[tuple[str, str | None, str | None, str | None], list[RelationTuple]] | None = None,
     ) -> bool:
         if at_least_as_fresh_as is not None:
             await self._storage.wait_for_token(at_least_as_fresh_as)
         target = ObjectRef.parse(resource)
         self._get_relation(target.namespace, permission)
         return await self._check_relation(
-            subject, target.namespace, target.object_id, permission, []
+            subject,
+            target.namespace,
+            target.object_id,
+            permission,
+            [],
+            context=context,
+            read_cache=_read_cache,
         )
+
+    async def explain(
+        self,
+        subject: str,
+        permission: str,
+        resource: str,
+        *,
+        at_least_as_fresh_as: Token | None = None,
+        context: Mapping[str, Any] | None = None,
+    ) -> EvaluationDecision:
+        if at_least_as_fresh_as is not None:
+            await self._storage.wait_for_token(at_least_as_fresh_as)
+        target = ObjectRef.parse(resource)
+        self._get_relation(target.namespace, permission)
+
+        collector = _TraceCollector()
+        allowed = await self._check_relation(
+            subject,
+            target.namespace,
+            target.object_id,
+            permission,
+            [],
+            context=context,
+            collector=collector,
+        )
+
+        target_node = f"{resource}#{permission}"
+        if allowed:
+            matched = tuple(collector.matched_tuples)
+            chain = [subject]
+            for t in matched:
+                node = f"{t.namespace}:{t.object_id}#{t.relation}"
+                if node not in chain:
+                    chain.append(node)
+            if target_node not in chain:
+                chain.append(target_node)
+            reason = f"Allowed via {' -> '.join(chain)}"
+        else:
+            matched = ()
+            reason = f"Denied: no matching relation or condition failed for {subject} on {target_node}"
+
+        return EvaluationDecision(
+            allowed=allowed,
+            subject=subject,
+            permission=permission,
+            resource=resource,
+            matched_tuples=matched,
+            visited_path=tuple(collector.visited_path),
+            condition_results=tuple(collector.condition_results),
+            reason=reason,
+        )
+
+    async def check_batch(
+        self,
+        checks: Sequence[CheckItem],
+        *,
+        at_least_as_fresh_as: Token | None = None,
+    ) -> list[bool]:
+        if at_least_as_fresh_as is not None:
+            await self._storage.wait_for_token(at_least_as_fresh_as)
+        read_cache: dict[tuple[str, str | None, str | None, str | None], list[RelationTuple]] = {}
+        results: list[bool] = []
+        for item in checks:
+            res = await self.check(
+                item.subject,
+                item.permission,
+                item.resource,
+                context=item.context,
+                _read_cache=read_cache,
+            )
+            results.append(res)
+        return results
+
+    async def list_permissions(
+        self,
+        subject: str,
+        resource: str,
+        permissions: Sequence[str] | None = None,
+        *,
+        at_least_as_fresh_as: Token | None = None,
+        context: Mapping[str, Any] | None = None,
+    ) -> list[str]:
+        target = ObjectRef.parse(resource)
+        ns = self._namespaces.get(target.namespace)
+        if ns is None:
+            raise NamespaceNotFound(target.namespace)
+        if permissions is None:
+            candidate_perms = list(ns.relations.keys())
+        else:
+            candidate_perms = list(permissions)
+        checks = [
+            CheckItem(
+                subject=subject,
+                permission=perm,
+                resource=resource,
+                context=context,
+            )
+            for perm in candidate_perms
+        ]
+        results = await self.check_batch(checks, at_least_as_fresh_as=at_least_as_fresh_as)
+        return [perm for perm, allowed in zip(candidate_perms, results) if allowed]
+
+    async def list_objects(
+        self,
+        subject: str,
+        permission: str,
+        namespace: str,
+        candidate_ids: Sequence[str] | None = None,
+        *,
+        at_least_as_fresh_as: Token | None = None,
+        context: Mapping[str, Any] | None = None,
+    ) -> list[str]:
+        self._get_relation(namespace, permission)
+        if candidate_ids is None:
+            if at_least_as_fresh_as is not None:
+                await self._storage.wait_for_token(at_least_as_fresh_as)
+                at_least_as_fresh_as = None
+            tuples = await self._storage.read_tuples(namespace)
+            seen: set[str] = set()
+            discovered: list[str] = []
+            for t in tuples:
+                if t.object_id not in seen:
+                    seen.add(t.object_id)
+                    discovered.append(t.object_id)
+            candidate_ids = discovered
+
+        if not candidate_ids:
+            return []
+
+        checks = [
+            CheckItem(
+                subject=subject,
+                permission=permission,
+                resource=f"{namespace}:{oid}",
+                context=context,
+            )
+            for oid in candidate_ids
+        ]
+        results = await self.check_batch(checks, at_least_as_fresh_as=at_least_as_fresh_as)
+        return [oid for oid, allowed in zip(candidate_ids, results) if allowed]
 
     async def _check_relation(
         self,
@@ -159,58 +366,166 @@ class Client:
         object_id: str,
         relation: str,
         path: list[tuple[str, str, str]],
+        *,
+        context: Mapping[str, Any] | None = None,
+        collector: _TraceCollector | None = None,
+        read_cache: dict[tuple[str, str | None, str | None, str | None], list[RelationTuple]] | None = None,
     ) -> bool:
         node = (namespace, object_id, relation)
+        node_str = f"{namespace}:{object_id}#{relation}"
+        if collector is not None and node_str not in collector.visited_path:
+            collector.visited_path.append(node_str)
+
         if node in path:
             trail = [f"{ns}:{oid}#{rel}" for ns, oid, rel in path]
-            trail.append(f"{namespace}:{object_id}#{relation}")
+            trail.append(node_str)
             raise CycleDetected(trail)
         if len(path) >= self._max_depth:
             raise DepthLimitExceeded(self._max_depth)
         rule = self._get_relation(namespace, relation)
         return await self._eval_rule(
-            rule, subject, namespace, object_id, relation, path + [node]
+            rule,
+            subject,
+            namespace,
+            object_id,
+            relation,
+            path + [node],
+            context=context,
+            collector=collector,
+            read_cache=read_cache,
         )
 
     async def _eval_rule(
         self,
-        rule,
+        rule: RewriteRule,
         subject: str,
         namespace: str,
         object_id: str,
         relation: str,
         path: list[tuple[str, str, str]],
+        *,
+        context: Mapping[str, Any] | None = None,
+        collector: _TraceCollector | None = None,
+        read_cache: dict[tuple[str, str | None, str | None, str | None], list[RelationTuple]] | None = None,
     ) -> bool:
         if isinstance(rule, Direct):
-            return await self._eval_direct(subject, namespace, object_id, relation, path)
+            return await self._eval_direct(
+                subject,
+                namespace,
+                object_id,
+                relation,
+                path,
+                context=context,
+                collector=collector,
+                read_cache=read_cache,
+            )
         if isinstance(rule, Union):
             for child in rule.children:
-                if await self._eval_rule(child, subject, namespace, object_id, relation, path):
+                mark = len(collector.matched_tuples) if collector is not None else 0
+                if await self._eval_rule(
+                    child,
+                    subject,
+                    namespace,
+                    object_id,
+                    relation,
+                    path,
+                    context=context,
+                    collector=collector,
+                    read_cache=read_cache,
+                ):
                     return True
+                if collector is not None:
+                    del collector.matched_tuples[mark:]
             return False
         if isinstance(rule, Intersection):
+            mark = len(collector.matched_tuples) if collector is not None else 0
             for child in rule.children:
-                if not await self._eval_rule(child, subject, namespace, object_id, relation, path):
+                if not await self._eval_rule(
+                    child,
+                    subject,
+                    namespace,
+                    object_id,
+                    relation,
+                    path,
+                    context=context,
+                    collector=collector,
+                    read_cache=read_cache,
+                ):
+                    if collector is not None:
+                        del collector.matched_tuples[mark:]
                     return False
             return True
         if isinstance(rule, Exclusion):
-            if not await self._eval_rule(rule.base, subject, namespace, object_id, relation, path):
+            mark = len(collector.matched_tuples) if collector is not None else 0
+            if not await self._eval_rule(
+                rule.base,
+                subject,
+                namespace,
+                object_id,
+                relation,
+                path,
+                context=context,
+                collector=collector,
+                read_cache=read_cache,
+            ):
+                if collector is not None:
+                    del collector.matched_tuples[mark:]
                 return False
-            return not await self._eval_rule(
-                rule.subtract, subject, namespace, object_id, relation, path
+            sub_mark = len(collector.matched_tuples) if collector is not None else 0
+            sub_result = await self._eval_rule(
+                rule.subtract,
+                subject,
+                namespace,
+                object_id,
+                relation,
+                path,
+                context=context,
+                collector=collector,
+                read_cache=read_cache,
             )
+            if collector is not None:
+                del collector.matched_tuples[sub_mark:]
+            if sub_result:
+                if collector is not None:
+                    del collector.matched_tuples[mark:]
+                return False
+            return True
         if isinstance(rule, From):
-            return await self._check_relation(subject, namespace, object_id, rule.relation, path)
+            return await self._check_relation(
+                subject,
+                namespace,
+                object_id,
+                rule.relation,
+                path,
+                context=context,
+                collector=collector,
+                read_cache=read_cache,
+            )
         if isinstance(rule, TupleToUserset):
-            parents = await self._storage.read_tuples(
-                namespace, object_id=object_id, relation=rule.tupleset_relation
+            parents = await self._read_tuples(
+                namespace,
+                object_id=object_id,
+                relation=rule.tupleset_relation,
+                read_cache=read_cache,
             )
             for pt in parents:
                 pref = pt.subject_ref
+                mark = len(collector.matched_tuples) if collector is not None else 0
                 if await self._check_relation(
-                    subject, pref.namespace, pref.object_id, rule.computed_relation, path
+                    subject,
+                    pref.namespace,
+                    pref.object_id,
+                    rule.computed_relation,
+                    path,
+                    context=context,
+                    collector=collector,
+                    read_cache=read_cache,
                 ):
+                    if collector is not None:
+                        collector.matched_tuples.append(pt)
                     return True
+                if collector is not None:
+                    del collector.matched_tuples[mark:]
             return False
         raise TypeError(f"unsupported rewrite rule: {rule!r}")
 
@@ -221,25 +536,48 @@ class Client:
         object_id: str,
         relation: str,
         path: list[tuple[str, str, str]],
+        *,
+        context: Mapping[str, Any] | None = None,
+        collector: _TraceCollector | None = None,
+        read_cache: dict[tuple[str, str | None, str | None, str | None], list[RelationTuple]] | None = None,
     ) -> bool:
         subject_ref = SubjectRef.parse(subject)
-        tuples = await self._storage.read_tuples(namespace, object_id=object_id, relation=relation)
+        tuples = await self._read_tuples(
+            namespace, object_id=object_id, relation=relation, read_cache=read_cache
+        )
         for t in tuples:
             if t.condition is not None:
+                merged_ctx = {**t.condition.context, **(context or {})}
                 holds = await self._conditions.evaluate(
-                    t.condition.name, subject, f"{namespace}:{object_id}", t.condition.context
+                    t.condition.name, subject, f"{namespace}:{object_id}", merged_ctx
                 )
+                if collector is not None:
+                    collector.condition_results.append((t.condition.name, holds))
                 if not holds:
                     continue
             tref = t.subject_ref
             if not tref.is_userset:
                 if tref.namespace == subject_ref.namespace and tref.object_id == subject_ref.object_id:
+                    if collector is not None:
+                        collector.matched_tuples.append(t)
                     return True
             else:
+                mark = len(collector.matched_tuples) if collector is not None else 0
                 if await self._check_relation(
-                    subject, tref.namespace, tref.object_id, tref.relation, path
+                    subject,
+                    tref.namespace,
+                    tref.object_id,
+                    tref.relation,
+                    path,
+                    context=context,
+                    collector=collector,
+                    read_cache=read_cache,
                 ):
+                    if collector is not None:
+                        collector.matched_tuples.append(t)
                     return True
+                if collector is not None:
+                    del collector.matched_tuples[mark:]
         return False
 
     async def expand(self, permission: str, resource: str) -> "UsersetTree":

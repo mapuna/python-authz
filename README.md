@@ -26,13 +26,15 @@ kept in agreement with each other.
 
 ## Status
 
-Early release, version 0.5:
+Release, version 0.6.0:
 
-- the core engine, async SQLite and PostgreSQL storage backends, and the
-  optional FastAPI `Depends()` integration (`authz.integrations.fastapi`,
-  installed via `python-authz[fastapi]`)
-- a reference sample app (`examples/sample_app/`) and OAuth2/JWT auth
-  integration recipes (`examples/auth_integrations/`)
+- **Unified ReBAC + RBAC + ABAC**: Zanzibar-style relationship graphs with dynamic runtime ABAC context.
+- **Audit Trail & Policy Explanation**: `Client.explain()` returning `EvaluationDecision` with traversed paths, matched tuples, condition evaluations, and human-readable reasons.
+- **Batch Evaluation & Caching**: `Client.check_batch()` evaluating sequences of `CheckItem`s with per-batch ephemeral read caching.
+- **Introspection**: `Client.list_permissions()` and `Client.list_objects()` for resource and subject discovery.
+- **Declarative Built-in ABAC Predicates**: `builtin_conditions()` and `PythonCallableEvaluator.with_builtins()` (`max_amount`, `min_amount`, `equals_attr`, `in_set`, `jurisdiction_match`, `not_same_subject`).
+- **Enhanced FastAPI Integration**: `requires()` with `get_context`, path/query/header resource parameter resolution, and `explain_access()` storing decisions on `request.state.authz_decision`.
+- Async SQLite and PostgreSQL storage backends.
 
 ## Roadmap
 

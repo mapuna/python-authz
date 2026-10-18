@@ -55,11 +55,10 @@ async def read_document(
 ```
 
 The resource string `"document:{document_id}"` is filled in from the
-route's own path parameter automatically: `document_id` here matches the
-`{document_id}` in the route path, and `requires()` fills the placeholder
-from FastAPI's already-parsed path parameters. If a route's resource
-can't be expressed as a path parameter, because it comes from a header,
-or needs a lookup, pass a function instead:
+route's parameters automatically: `requires()` checks `request.path_params`,
+`request.query_params`, and `request.headers` to resolve formatted placeholders
+like `{document_id}`, `{claim_id}`, or `{x-tenant-id}`. If a route's resource
+can't be expressed as a template string, pass a sync or async function instead:
 
 ```python
 def resource_from_header(request):
@@ -71,6 +70,57 @@ async def resource_from_lookup(request):
     return f"document:{doc.id}"
 
 Depends(requires("viewer", resource_from_header, get_client=..., get_subject=...))
+```
+
+### Dynamic ABAC Context (`get_context`)
+
+Routes can supply runtime ABAC context (e.g. monetary amounts, jurisdictions, client IP)
+via `get_context`:
+
+```python
+def get_request_context(request: Request) -> dict:
+    return {
+        "amount": float(request.query_params.get("amount", 0)),
+        "jurisdiction": request.headers.get("X-Jurisdiction", "US"),
+    }
+
+@app.post("/claims/{claim_id}/approve")
+async def approve_claim(
+    claim_id: str,
+    _: None = Depends(requires(
+        "approver", "claim:{claim_id}",
+        get_client=get_authz_client,
+        get_subject=get_current_user,
+        get_context=get_request_context,
+    )),
+):
+    ...
+```
+
+### Policy Explanation & Audit Trails (`explain_access`)
+
+When you need an audit trail or explanation of *why* access was granted or denied,
+use `explain_access()`:
+
+```python
+from authz import EvaluationDecision
+from authz.integrations.fastapi import explain_access
+
+@app.post("/claims/{claim_id}/settle")
+async def settle_claim(
+    claim_id: str,
+    request: Request,
+    decision: EvaluationDecision = Depends(explain_access(
+        "settle", "claim:{claim_id}",
+        get_client=get_authz_client,
+        get_subject=get_current_user,
+        get_context=get_request_context,
+        detail="Unauthorized settlement",
+    )),
+):
+    # decision is also available on request.state.authz_decision
+    print(decision.reason)  # e.g. "Allowed via user:alice -> group:adjusters#member -> claim:10#settle"
+    return {"status": "settled", "reason": decision.reason}
 ```
 
 `requires()` doesn't own the `Client` or the user lookup. Every real app

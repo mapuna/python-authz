@@ -53,6 +53,16 @@ def test_core_works_with_fastapi_unavailable(monkeypatch):
             [authz.RelationTuple("demo", "root", "member", "user:alice")]
         )
         assert await client.check("user:alice", "member", "demo:root") is True
+        decision = await client.explain("user:alice", "member", "demo:root")
+        assert decision.allowed is True
+        batch_results = await client.check_batch(
+            [authz.CheckItem("user:alice", "member", "demo:root")]
+        )
+        assert batch_results == [True]
+        perms = await client.list_permissions("user:alice", "demo:root")
+        assert perms == ["member"]
+        objs = await client.list_objects("user:alice", "member", "demo")
+        assert objs == ["root"]
         await storage.close()
 
     import asyncio

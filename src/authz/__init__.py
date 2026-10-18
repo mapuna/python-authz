@@ -1,5 +1,9 @@
-from authz.conditions import ConditionEvaluator, PythonCallableEvaluator
-from authz.engine import Client, UsersetTree
+from authz.conditions import (
+    ConditionEvaluator,
+    PythonCallableEvaluator,
+    builtin_conditions,
+)
+from authz.engine import CheckItem, Client, EvaluationDecision, UsersetTree
 from authz.errors import (
     AuthError,
     ConditionNotFound,
@@ -27,6 +31,7 @@ from authz.tuples import Condition, ObjectRef, RelationTuple, SubjectRef
 
 __all__ = [
     "AuthError",
+    "CheckItem",
     "Client",
     "Condition",
     "ConditionEvaluator",
@@ -34,6 +39,7 @@ __all__ = [
     "CycleDetected",
     "DepthLimitExceeded",
     "Direct",
+    "EvaluationDecision",
     "Exclusion",
     "From",
     "Intersection",
@@ -54,6 +60,7 @@ __all__ = [
     "Union",
     "UsersetTree",
     "WouldCreateCycle",
+    "builtin_conditions",
 ]
 
 
