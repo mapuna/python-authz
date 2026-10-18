@@ -4,6 +4,7 @@ from typing import Any, Mapping, Sequence
 
 from authz.conditions import ConditionEvaluator, ConditionFn
 from authz.errors import (
+    CardinalityViolationError,
     ConditionNotFound,
     CycleDetected,
     DepthLimitExceeded,
@@ -147,6 +148,32 @@ class Client:
         for t in tuples:
             self._validate_tuple(t)
         async with self._storage.transaction():
+            target_subjects: dict[tuple[str, str, str], list[str]] = {}
+            for t in tuples:
+                ns = self._namespaces[t.namespace]
+                max_limit = ns.max_subjects_for(t.relation)
+                if max_limit is not None:
+                    target_key = (t.namespace, t.object_id, t.relation)
+                    if target_key not in target_subjects:
+                        existing = await self._storage.read_tuples(
+                            t.namespace, object_id=t.object_id, relation=t.relation
+                        )
+                        target_subjects[target_key] = list(
+                            dict.fromkeys(et.subject for et in existing)
+                        )
+                    current = target_subjects[target_key]
+                    if t.subject not in current:
+                        if len(current) >= max_limit:
+                            raise CardinalityViolationError(
+                                namespace=t.namespace,
+                                object_id=t.object_id,
+                                relation=t.relation,
+                                max_subjects=max_limit,
+                                existing_subjects=tuple(current),
+                                attempted_subject=t.subject,
+                            )
+                        current.append(t.subject)
+
             for t in tuples:
                 if self._is_graph_edge(t):
                     await self._guard_against_cycle(t)

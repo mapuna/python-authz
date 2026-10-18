@@ -26,8 +26,10 @@ kept in agreement with each other.
 
 ## Status
 
-Release, version 0.6.0:
+Release, version 0.7.0:
 
+- **Singleton & Cardinality Constraints**: Enforce subject limits on relations (e.g. at most 1 `org_admin`) via `singleton_relations` and `max_subjects` on `Namespace`, raising `CardinalityViolationError` on violations while maintaining idempotent rewrites.
+- **Declarative Role Hierarchies & Strict Upward Overrides**: `build_role_hierarchy(roles_high_to_low, extra_relations=...)` creates multi-tier role hierarchies with transitive downward inheritance and strict upward override relations (`override_<role>`).
 - **Unified ReBAC + RBAC + ABAC**: Zanzibar-style relationship graphs with dynamic runtime ABAC context.
 - **Audit Trail & Policy Explanation**: `Client.explain()` returning `EvaluationDecision` with traversed paths, matched tuples, condition evaluations, and human-readable reasons.
 - **Batch Evaluation & Caching**: `Client.check_batch()` evaluating sequences of `CheckItem`s with per-batch ephemeral read caching.
@@ -100,6 +102,37 @@ It covers schema vs. data cycles, which rewrite rule (`Union`,
 `Intersection`, `Exclusion`, `From`, `TupleToUserset`) fits which
 situation, and when a depth-limit error means your data is legitimately
 deep versus something bypassed the guards.
+
+## Role Hierarchies & Cardinality Constraints
+
+v0.7.0 adds first-class support for ordered role tiers with upward override relations and singleton limits:
+
+```python
+from authz import Namespace, build_role_hierarchy, RelationTuple, CardinalityViolationError
+
+# Build 5-tier role relations with downward inheritance and override_<role> relations
+roles = build_role_hierarchy([
+    "org_admin",
+    "org_manager",
+    "tpa_coordinator",
+    "org_user",
+    "diagnostic_billing_staff",
+])
+
+# Enforce singleton constraint: an organization can have at most ONE org_admin
+org_ns = Namespace("org", roles, singleton_relations={"org_admin"})
+client.register_schema(org_ns)
+
+# Alice is assigned org_admin -> inherits org_manager, tpa_coordinator, etc.
+await client.write([RelationTuple("org", "acme", "org_admin", "user:alice")])
+assert await client.check("user:alice", "org_user", "org:acme") is True
+
+# Bob cannot also be assigned org_admin on the same org
+try:
+    await client.write([RelationTuple("org", "acme", "org_admin", "user:bob")])
+except CardinalityViolationError as e:
+    print(f"Singleton violation: {e}")
+```
 
 ## FastAPI Integration Example
 

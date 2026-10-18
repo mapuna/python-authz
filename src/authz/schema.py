@@ -1,3 +1,4 @@
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Iterator
 
 from authz.errors import SchemaCycleDetected
@@ -55,9 +56,57 @@ class TupleToUserset(RewriteRule):
 
 
 class Namespace:
-    def __init__(self, name: str, relations: dict[str, RewriteRule]):
+    def __init__(
+        self,
+        name: str,
+        relations: Mapping[str, RewriteRule],
+        singleton_relations: Iterable[str] | None = None,
+        max_subjects: Mapping[str, int] | None = None,
+    ) -> None:
         self.name = name
-        self.relations = relations
+        self.relations = relations  # type: ignore[assignment]
+        self.singleton_relations: frozenset[str] = (
+            frozenset(singleton_relations) if singleton_relations is not None else frozenset()
+        )
+        self.max_subjects: Mapping[str, int] = (
+            dict(max_subjects) if max_subjects is not None else {}
+        )
+
+    def max_subjects_for(self, relation: str) -> int | None:
+        if relation in self.singleton_relations:
+            return 1
+        return self.max_subjects.get(relation)
+
+
+def build_role_hierarchy(
+    roles_high_to_low: Sequence[str],
+    *,
+    extra_relations: Mapping[str, RewriteRule] | None = None,
+) -> dict[str, RewriteRule]:
+    """Build a role hierarchy with transitive downward inheritance and strict upward override relations.
+
+    Given an ordered sequence of roles from highest to lowest (e.g. ['org_admin', 'org_manager', ...]):
+    - Index 0 (top role): Direct() and override_<top_role> = From(<top_role>)
+    - Index i > 0: Union(Direct(), From(<superior_role>)) and override_<role> = From(<superior_role>)
+    - Merges any extra_relations provided.
+    """
+    if len(roles_high_to_low) != len(set(roles_high_to_low)):
+        raise ValueError("Role hierarchy must not contain duplicate roles")
+
+    relations: dict[str, RewriteRule] = {}
+    for i, role in enumerate(roles_high_to_low):
+        if i == 0:
+            relations[role] = Direct()
+            relations[f"override_{role}"] = From(role)
+        else:
+            superior_role = roles_high_to_low[i - 1]
+            relations[role] = Union(Direct(), From(superior_role))
+            relations[f"override_{role}"] = From(superior_role)
+
+    if extra_relations is not None:
+        relations.update(extra_relations)
+
+    return relations
 
 
 def _from_edges(rule: RewriteRule) -> Iterator[str]:

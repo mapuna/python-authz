@@ -2,6 +2,7 @@ import pytest
 
 from authz.errors import (
     AuthError,
+    CardinalityViolationError,
     ConditionNotFound,
     CycleDetected,
     DepthLimitExceeded,
@@ -22,6 +23,7 @@ from authz.errors import (
         WouldCreateCycle,
         CycleDetected,
         DepthLimitExceeded,
+        CardinalityViolationError,
     ],
 )
 def test_all_errors_are_auth_errors(exc_type):
@@ -70,3 +72,25 @@ def test_depth_limit_exceeded_message():
     err = DepthLimitExceeded(25)
     assert err.max_depth == 25
     assert "25" in str(err)
+
+
+def test_cardinality_violation_error_message():
+    err = CardinalityViolationError(
+        namespace="org",
+        object_id="acme",
+        relation="org_admin",
+        max_subjects=1,
+        existing_subjects=("user:alice",),
+        attempted_subject="user:bob",
+    )
+    assert err.namespace == "org"
+    assert err.object_id == "acme"
+    assert err.relation == "org_admin"
+    assert err.max_subjects == 1
+    assert err.existing_subjects == ("user:alice",)
+    assert err.attempted_subject == "user:bob"
+    msg = str(err)
+    assert "org:acme#org_admin" in msg
+    assert "max_subjects=1" in msg
+    assert "existing=['user:alice']" in msg
+    assert "attempted='user:bob'" in msg

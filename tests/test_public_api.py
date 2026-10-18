@@ -30,6 +30,8 @@ def test_public_api_exports_expected_names():
         "CheckItem",
         "EvaluationDecision",
         "builtin_conditions",
+        "CardinalityViolationError",
+        "build_role_hierarchy",
     }
     for name in expected:
         assert hasattr(authz, name), f"missing export: {name}"

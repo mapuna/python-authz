@@ -48,3 +48,28 @@ class DepthLimitExceeded(AuthError):
     def __init__(self, max_depth: int):
         super().__init__(f"recursion exceeded max_depth={max_depth}")
         self.max_depth = max_depth
+
+
+class CardinalityViolationError(AuthError):
+    """Raised when writing a tuple would exceed a relation's max_subjects limit (e.g. singleton org_admin)."""
+
+    def __init__(
+        self,
+        namespace: str,
+        object_id: str,
+        relation: str,
+        max_subjects: int,
+        existing_subjects: tuple[str, ...],
+        attempted_subject: str,
+    ) -> None:
+        self.namespace = namespace
+        self.object_id = object_id
+        self.relation = relation
+        self.max_subjects = max_subjects
+        self.existing_subjects = existing_subjects
+        self.attempted_subject = attempted_subject
+        super().__init__(
+            f"Cardinality violation on {namespace}:{object_id}#{relation}: "
+            f"max_subjects={max_subjects}, existing={list(existing_subjects)}, "
+            f"attempted={attempted_subject!r}"
+        )

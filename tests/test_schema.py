@@ -6,6 +6,7 @@ from authz.schema import (
     Namespace,
     TupleToUserset,
     Union,
+    build_role_hierarchy,
 )
 
 
@@ -50,3 +51,60 @@ def test_namespace_holds_name_and_relations():
     ns = Namespace("document", relations)
     assert ns.name == "document"
     assert ns.relations is relations
+    assert ns.singleton_relations == frozenset()
+    assert ns.max_subjects == {}
+    assert ns.max_subjects_for("owner") is None
+
+
+def test_namespace_singleton_and_max_subjects():
+    relations = {
+        "org_admin": Direct(),
+        "manager": Direct(),
+        "member": Direct(),
+    }
+    ns = Namespace(
+        "org",
+        relations,
+        singleton_relations={"org_admin"},
+        max_subjects={"manager": 3},
+    )
+    assert ns.singleton_relations == frozenset({"org_admin"})
+    assert ns.max_subjects == {"manager": 3}
+    assert ns.max_subjects_for("org_admin") == 1
+    assert ns.max_subjects_for("manager") == 3
+    assert ns.max_subjects_for("member") is None
+
+
+def test_build_role_hierarchy():
+    roles = ["org_admin", "org_manager", "tpa_coordinator", "org_user", "diagnostic_billing_staff"]
+    extra = {"custom_perm": Direct()}
+    rel_map = build_role_hierarchy(roles, extra_relations=extra)
+
+    # Top role
+    assert isinstance(rel_map["org_admin"], Direct)
+    assert isinstance(rel_map["override_org_admin"], From)
+    assert rel_map["override_org_admin"].relation == "org_admin"
+
+    # Second role
+    assert isinstance(rel_map["org_manager"], Union)
+    assert isinstance(rel_map["org_manager"].children[0], Direct)
+    assert isinstance(rel_map["org_manager"].children[1], From)
+    assert rel_map["org_manager"].children[1].relation == "org_admin"
+    assert isinstance(rel_map["override_org_manager"], From)
+    assert rel_map["override_org_manager"].relation == "org_admin"
+
+    # Fifth role
+    assert isinstance(rel_map["diagnostic_billing_staff"], Union)
+    assert rel_map["diagnostic_billing_staff"].children[1].relation == "org_user"
+    assert rel_map["override_diagnostic_billing_staff"].relation == "org_user"
+
+    # Extra relations preserved
+    assert "custom_perm" in rel_map
+    assert isinstance(rel_map["custom_perm"], Direct)
+
+
+def test_build_role_hierarchy_duplicate_roles_raises():
+    import pytest
+
+    with pytest.raises(ValueError, match="duplicate"):
+        build_role_hierarchy(["admin", "manager", "admin"])

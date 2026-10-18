@@ -6,6 +6,7 @@ from authz.conditions import (
 from authz.engine import CheckItem, Client, EvaluationDecision, UsersetTree
 from authz.errors import (
     AuthError,
+    CardinalityViolationError,
     ConditionNotFound,
     CycleDetected,
     DepthLimitExceeded,
@@ -23,6 +24,7 @@ from authz.schema import (
     RewriteRule,
     TupleToUserset,
     Union,
+    build_role_hierarchy,
 )
 from authz.storage.base import Storage, Token
 from authz.storage.postgres import PostgresStorage
@@ -31,6 +33,7 @@ from authz.tuples import Condition, ObjectRef, RelationTuple, SubjectRef
 
 __all__ = [
     "AuthError",
+    "CardinalityViolationError",
     "CheckItem",
     "Client",
     "Condition",
@@ -60,6 +63,7 @@ __all__ = [
     "Union",
     "UsersetTree",
     "WouldCreateCycle",
+    "build_role_hierarchy",
     "builtin_conditions",
 ]
 
